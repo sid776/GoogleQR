@@ -38,6 +38,7 @@
     gap: 4,
     fill: true,
     cutGuides: true,
+    place: null,
   };
 
   const FIELDS = {
@@ -422,9 +423,153 @@
       invalid: ['err', '✗ That doesn\'t look like a link or a Place ID.'],
       toolong: ['err', '✗ That link is too long to fit in a QR code.'],
     };
+    const place = state.place;
+    if (place && link.url && link.url.includes(encodeURIComponent(place.placeId))) {
+      el.className = 'status ok';
+      el.textContent = `✓ Linked to ${place.name}${place.address ? ' — ' + place.address : ''}`;
+      return;
+    }
     const [cls, msg] = messages[link.kind];
     el.className = 'status ' + cls;
     el.textContent = msg;
+  }
+
+  // -------------------------------------------------------- business search
+
+  function reviewUrlFor(placeId) {
+    return 'https://search.google.com/local/writereview?placeid=' + encodeURIComponent(placeId);
+  }
+
+  function setupPlaceSearch() {
+    const input = $('place-search');
+    const list = $('place-results');
+    const status = $('place-status');
+    let results = [];
+    let optionsHtml = '';
+    let active = -1;
+    let timer = 0;
+    let controller = null;
+
+    const setStatus = (cls, msg) => { status.className = 'status ' + cls; status.textContent = msg; };
+
+    function close() {
+      list.hidden = true;
+      input.setAttribute('aria-expanded', 'false');
+      input.removeAttribute('aria-activedescendant');
+      active = -1;
+    }
+
+    function show(html) {
+      list.innerHTML = html + '<li class="attribution" aria-hidden="true">powered by Google</li>';
+      list.hidden = false;
+      input.setAttribute('aria-expanded', 'true');
+    }
+
+    function highlight(index) {
+      active = index;
+      list.querySelectorAll('.option').forEach((li, i) => li.setAttribute('aria-selected', String(i === index)));
+      const li = list.querySelector(`#place-opt-${index}`);
+      if (li) {
+        input.setAttribute('aria-activedescendant', li.id);
+        li.scrollIntoView({ block: 'nearest' });
+      }
+    }
+
+    function choose(index) {
+      const p = results[index];
+      if (!p) return;
+      state.place = { placeId: p.placeId, name: p.name, address: p.address };
+      state.link = reviewUrlFor(p.placeId);
+      if (!state.businessName.trim()) state.businessName = p.name;
+      $('link').value = state.link;
+      $('businessName').value = state.businessName;
+      input.value = p.name;
+      close();
+      setStatus('', '');
+      saveState();
+      scheduleRender();
+    }
+
+    async function search(q) {
+      controller?.abort();
+      controller = new AbortController();
+      show('<li class="note">Searching…</li>');
+      try {
+        const resp = await fetch('/api/places?q=' + encodeURIComponent(q), { signal: controller.signal });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(data.error || 'Search failed');
+        results = data.results || [];
+        if (!results.length) {
+          show('<li class="note">No businesses found. Try adding your city or street.</li>');
+          return;
+        }
+        optionsHtml = results.map((p, i) =>
+          `<li class="option" role="option" id="place-opt-${i}" data-index="${i}" aria-selected="false">` +
+          `<span class="place-name">${esc(p.name)}</span>` +
+          (p.address ? `<span class="place-address">${esc(p.address)}</span>` : '') + '</li>'
+        ).join('');
+        show(optionsHtml);
+        active = -1;
+      } catch (err) {
+        if (err.name === 'AbortError') return;
+        close();
+        setStatus('err', '✗ ' + err.message);
+      }
+    }
+
+    input.addEventListener('input', () => {
+      clearTimeout(timer);
+      setStatus('', '');
+      const q = input.value.trim();
+      if (q.length < 3) {
+        controller?.abort();
+        results = [];
+        close();
+        return;
+      }
+      timer = setTimeout(() => search(q), 300);
+    });
+
+    input.addEventListener('keydown', (e) => {
+      if (list.hidden || !results.length) return;
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        highlight((active + 1) % results.length);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        highlight((active - 1 + results.length) % results.length);
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        choose(active >= 0 ? active : 0);
+      } else if (e.key === 'Escape') {
+        close();
+      }
+    });
+
+    list.addEventListener('mousedown', (e) => {
+      const li = e.target.closest('.option');
+      if (!li) return;
+      e.preventDefault();
+      choose(Number(li.dataset.index));
+    });
+
+    input.addEventListener('blur', close);
+    input.addEventListener('focus', () => { if (results.length && optionsHtml) show(optionsHtml); });
+
+    if (state.place) input.value = state.place.name;
+
+    fetch('/api/config')
+      .then((resp) => (resp.ok ? resp.json() : Promise.reject()))
+      .then((cfg) => {
+        if (!cfg.placesEnabled) {
+          input.disabled = true;
+          setStatus('warn', 'Business search needs a Google Maps API key on the server (GOOGLE_MAPS_API_KEY). You can still paste your link below.');
+        }
+      })
+      .catch(() => {
+        input.disabled = true;
+        setStatus('warn', 'Business search only works when the app runs on its server (npm start). You can still paste your link below.');
+      });
   }
 
   function renderSheets() {
@@ -594,6 +739,7 @@
     window.addEventListener('beforeprint', preparePrint);
     window.addEventListener('resize', () => { if (current.sticker) renderSheets(); });
 
+    setupPlaceSearch();
     render();
   }
 

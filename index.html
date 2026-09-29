@@ -22,7 +22,20 @@
   <main class="layout">
     <section class="controls">
       <div class="card">
-        <h2><span class="step">1</span> Your Google review link</h2>
+        <h2><span class="step">1</span> Find your business on Google</h2>
+        <div class="field">
+          <label for="place-search">Search for your business</label>
+          <div class="combo">
+            <input id="place-search" type="search" role="combobox" autocomplete="off" spellcheck="false"
+                   aria-autocomplete="list" aria-expanded="false" aria-controls="place-results"
+                   placeholder="Start typing your business name and city&hellip;">
+            <ul id="place-results" class="combo-list" role="listbox" hidden></ul>
+          </div>
+        </div>
+        <p id="place-status" class="status"></p>
+
+        <div class="divider"><span>or paste your review link</span></div>
+
         <label class="field">
           <span>Review link or Place ID</span>
           <input id="link" type="text" autocomplete="off" spellcheck="false"
