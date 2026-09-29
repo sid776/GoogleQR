@@ -1,0 +1,12 @@
+{
+  "name": "google-review-qr-stickers",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Generate printable Google review QR code stickers for your shop or restaurant.",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

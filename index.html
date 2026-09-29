@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Google Review QR Sticker Maker</title>
+  <link rel="stylesheet" href="styles.css">
+  <style id="page-style"></style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-logo" id="brand-logo"></span>
+      <div>
+        <h1>Review QR Sticker Maker</h1>
+        <p>Print Google review stickers for your counter, tables, menus and door.</p>
+      </div>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="controls">
+      <div class="card">
+        <h2><span class="step">1</span> Your Google review link</h2>
+        <label class="field">
+          <span>Review link or Place ID</span>
+          <input id="link" type="text" autocomplete="off" spellcheck="false"
+                 placeholder="https://g.page/r/XXXXXXXX/review  or  ChIJ...">
+        </label>
+        <p id="link-status" class="status"></p>
+        <button id="test-link" class="btn ghost" type="button">Test link &#8599;</button>
+        <details class="help">
+          <summary>How do I find my review link?</summary>
+          <ol>
+            <li><strong>Easiest:</strong> sign in to the Google account that manages your business,
+              search Google for your business name, and click <em>Ask for reviews</em>
+              (or <em>Get more reviews</em>) on your Business Profile. Copy the link &mdash; it looks like
+              <code>https://g.page/r/&hellip;/review</code>.</li>
+            <li><strong>Alternative:</strong> open Google's
+              <a href="https://developers.google.com/maps/documentation/places/web-service/place-id" target="_blank" rel="noopener">Place ID Finder</a>,
+              search for your business and copy its Place ID (starts with <code>ChIJ</code>).
+              Paste it above and the review link is built for you.</li>
+          </ol>
+          <p>Always press <em>Test link</em> or scan the preview with your phone before printing.</p>
+        </details>
+      </div>
+
+      <div class="card">
+        <h2><span class="step">2</span> Sticker text</h2>
+        <label class="field">
+          <span>Business name (optional)</span>
+          <input id="businessName" type="text" maxlength="60" placeholder="e.g. Spice Garden Restaurant">
+        </label>
+        <div class="grid2">
+          <label class="field">
+            <span>Headline (before &ldquo;Google&rdquo;)</span>
+            <input id="headline" type="text" maxlength="30">
+          </label>
+          <label class="field">
+            <span>Call to action</span>
+            <input id="cta" type="text" maxlength="40">
+          </label>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2><span class="step">3</span> Design</h2>
+        <div class="segmented" role="radiogroup" aria-label="Sticker shape">
+          <label><input type="radio" name="shape" value="portrait"><span>Tall card</span></label>
+          <label><input type="radio" name="shape" value="landscape"><span>Wide card</span></label>
+          <label><input type="radio" name="shape" value="round"><span>Round</span></label>
+        </div>
+        <p id="shape-hint" class="hint"></p>
+
+        <label class="field">
+          <span>Sticker width (mm)</span>
+          <input id="width" type="number" min="25" max="190" step="1">
+        </label>
+        <div class="chips" id="size-chips"></div>
+        <p id="width-hint" class="hint"></p>
+
+        <div class="field"><span>Accent colour</span></div>
+        <div class="swatches" id="swatches">
+          <input id="accent" type="color" title="Custom colour">
+        </div>
+
+        <label class="toggle"><input id="border" type="checkbox"> Coloured border</label>
+        <label class="toggle"><input id="stars" type="checkbox"> Show 5 stars</label>
+        <label class="toggle"><input id="centerLogo" type="checkbox"> Google logo in the middle of the QR code</label>
+      </div>
+
+      <div class="card">
+        <h2><span class="step">4</span> Print sheet</h2>
+        <div class="grid2">
+          <label class="field">
+            <span>Paper size</span>
+            <select id="page">
+              <option value="letter">US Letter (8.5 &times; 11 in)</option>
+              <option value="a4">A4 (210 &times; 297 mm)</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Copies</span>
+            <input id="copies" type="number" min="1" max="500" step="1">
+          </label>
+          <label class="field">
+            <span>Page margin (mm)</span>
+            <input id="margin" type="number" min="0" max="30" step="1">
+          </label>
+          <label class="field">
+            <span>Space between (mm)</span>
+            <input id="gap" type="number" min="0" max="30" step="1">
+          </label>
+        </div>
+        <label class="toggle"><input id="fill" type="checkbox"> Fill the whole page (ignore copies)</label>
+        <label class="toggle"><input id="cutGuides" type="checkbox"> Dashed cut lines</label>
+      </div>
+    </section>
+
+    <section class="previews">
+      <div class="card">
+        <h2>Sticker preview</h2>
+        <div class="preview-card">
+          <div class="sticker-preview" id="sticker-preview"></div>
+          <div class="preview-info">
+            <p class="muted">Point your phone camera at the preview to check it opens your review page.</p>
+            <p class="label">QR code opens:</p>
+            <p><code id="qr-url" class="url">&mdash;</code></p>
+            <div class="actions">
+              <button id="dl-png" class="btn ghost" type="button">Download PNG (300 DPI)</button>
+              <button id="dl-svg" class="btn ghost" type="button">Download SVG</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="sheet-head">
+          <div>
+            <h2>Print sheet</h2>
+            <p id="sheet-summary" class="muted"></p>
+          </div>
+          <button id="print" class="btn primary" type="button">&#128424; Print stickers</button>
+        </div>
+        <div class="sheets" id="sheets"></div>
+        <ul class="tips">
+          <li>In the print dialog, set <strong>Scale</strong> to <strong>100%</strong> (&ldquo;Actual size&rdquo;) so the stickers come out the size you chose.</li>
+          <li>Print on full-sheet sticker/label paper and cut along the dashed lines, or pick <strong>Save as PDF</strong> to send the file to a print shop.</li>
+          <li>For a glossy, waterproof finish on tables, laminate the sheet or use vinyl sticker paper.</li>
+        </ul>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="print-root"></div>
+
+<script src="lib/qrcode.js"></script>
+<script src="lib/qrcode_UTF8.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
