@@ -20,6 +20,22 @@ The "Search for your business" box suggests Google businesses as you type. Picki
 
 The key stays on the server and is never sent to the browser. Searches are limited to 60 per minute per visitor. Without a key, the search box is disabled, and people can still paste their review link or Place ID.
 
+## Payments with Stripe (optional)
+
+Designing and previewing are free. A one-time payment (default $19.99) unlocks printing and PNG/SVG downloads. Payment happens on Stripe's hosted Checkout page, so card details never touch this app.
+
+After paying, the customer's browser stores a signed unlock code. The unlock panel has a **Copy unlock link** button so they can unlock another device.
+
+| Variable | Purpose |
+| --- | --- |
+| `STRIPE_SECRET_KEY` | Stripe secret key. Leave empty to keep the app free. |
+| `PRICE_CENTS` | Price in cents, default `1999`. |
+| `CURRENCY` | Currency code, default `usd`. |
+| `UNLOCK_SECRET` | Long random string that signs unlock codes. Set it once and don't change it, or existing unlocks stop working. |
+| `PUBLIC_URL` | Your site address, e.g. `https://your-app.up.railway.app`, used for Stripe's return links. |
+
+Test with a `sk_test_...` key and card `4242 4242 4242 4242` (any future date, any CVC). Switch to the `sk_live_...` key when you're ready to take real payments.
+
 ## Run locally
 
 ```bash

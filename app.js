@@ -343,13 +343,27 @@
     const layout = (LAYOUTS[o.shape] || layoutPortrait)(o, qr);
     const wmm = o.width;
     const hmm = wmm * layout.H / layout.W;
+    const clip = o.shape === 'round'
+      ? `<circle cx="${layout.W / 2}" cy="${r(layout.H / 2)}" r="${layout.W / 2}"/>`
+      : `<rect width="${layout.W}" height="${r(layout.H)}" rx="17"/>`;
     return {
       ...layout,
       wmm,
       hmm,
-      svg: (w, h) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${layout.W} ${r(layout.H)}" ` +
-        `width="${w}" height="${h}">${layout.body}</svg>`,
+      svg: (w, h, watermark = false) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${layout.W} ${r(layout.H)}" ` +
+        `width="${w}" height="${h}">${layout.body}${watermark ? watermarkMarkup(layout.W, layout.H, clip) : ''}</svg>`,
     };
+  }
+
+  function watermarkMarkup(W, H, clip) {
+    const size = W * 0.1;
+    let out = `<clipPath id="wm-clip">${clip}</clipPath><g clip-path="url(#wm-clip)">` +
+      `<g transform="rotate(-30 ${r(W / 2)} ${r(H / 2)})" font-family="${FONT}" font-weight="800" ` +
+      `font-size="${r(size)}" fill="#d93025" fill-opacity="0.2" text-anchor="middle" pointer-events="none">`;
+    for (let y = -H * 0.3; y <= H * 1.3; y += size * 2.4) {
+      out += `<text x="${r(W / 2)}" y="${r(y)}">PREVIEW · PREVIEW · PREVIEW</text>`;
+    }
+    return out + '</g></g>';
   }
 
   // --------------------------------------------------------------- sheets
@@ -366,8 +380,8 @@
     return { page, cols, rows, perPage, total, pages };
   }
 
-  function sheetsMarkup(sticker, sl) {
-    const svg = sticker.svg(`${r(sticker.wmm)}mm`, `${r(sticker.hmm)}mm`);
+  function sheetsMarkup(sticker, sl, watermark = false) {
+    const svg = sticker.svg(`${r(sticker.wmm)}mm`, `${r(sticker.hmm)}mm`, watermark);
     const classes = ['sheet', state.cutGuides ? 'cut' : '', state.shape === 'round' ? 'round' : ''].join(' ');
     const style = `width:${sl.page.w}mm;height:${r(sl.page.h - 0.4)}mm;padding:${state.margin}mm;` +
       `grid-template-columns:repeat(${sl.cols},${r(sticker.wmm)}mm);grid-auto-rows:${r(sticker.hmm)}mm;gap:${state.gap}mm;`;
@@ -398,7 +412,7 @@
     const sticker = buildSticker(state, qr);
     current = { sticker, url: link.url, sl: sheetLayout(sticker) };
 
-    $('sticker-preview').innerHTML = sticker.svg(sticker.W, r(sticker.H));
+    $('sticker-preview').innerHTML = sticker.svg(sticker.W, r(sticker.H), showWatermark());
     $('qr-url').textContent = link.url || '—';
 
     const inches = (mm) => (mm / 25.4).toFixed(2);
@@ -407,6 +421,10 @@
 
     const ready = Boolean(link.url);
     ['dl-png', 'dl-svg', 'print', 'test-link'].forEach((id) => { $(id).disabled = !ready; });
+    ['dl-png', 'dl-svg', 'print'].forEach((id) => {
+      const btn = $(id);
+      btn.textContent = (showWatermark() ? '🔒 ' : '') + btn.dataset.label;
+    });
     $('copies').disabled = state.fill;
 
     renderSheets();
@@ -440,7 +458,7 @@
     return 'https://search.google.com/local/writereview?placeid=' + encodeURIComponent(placeId);
   }
 
-  function setupPlaceSearch() {
+  function setupPlaceSearch(configPromise) {
     const input = $('place-search');
     const list = $('place-results');
     const status = $('place-status');
@@ -558,8 +576,7 @@
 
     if (state.place) input.value = state.place.name;
 
-    fetch('/api/config')
-      .then((resp) => (resp.ok ? resp.json() : Promise.reject()))
+    configPromise
       .then((cfg) => {
         if (!cfg.placesEnabled) {
           input.disabled = true;
@@ -591,7 +608,7 @@
     const pageHpx = sl.page.h * MM_TO_PX;
     const scale = Math.min(1, Math.min(available, 460) / pageWpx);
 
-    container.innerHTML = sheetsMarkup(sticker, sl).map((html, i) =>
+    container.innerHTML = sheetsMarkup(sticker, sl, showWatermark()).map((html, i) =>
       `<div class="sheet-frame" style="width:${r(pageWpx * scale)}px;height:${r(pageHpx * scale)}px">` +
       html.replace('style="', `style="transform:scale(${scale.toFixed(4)});`) +
       `<span class="page-label">Page ${i + 1}</span></div>`).join('');
@@ -648,10 +665,144 @@
 
   function preparePrint() {
     const { sticker, sl } = current;
+    if (isLocked()) {
+      $('print-root').innerHTML = '<div class="print-locked">Printing is locked. Unlock it in the Review QR Sticker Maker with a one-time payment.</div>';
+      return false;
+    }
     if (!current.url || sl.perPage === 0) return false;
     $('page-style').textContent = `@page { size: ${sl.page.w}mm ${sl.page.h}mm; margin: 0; }`;
     $('print-root').innerHTML = sheetsMarkup(sticker, sl).join('');
     return true;
+  }
+
+  // ------------------------------------------------------------- payments
+
+  const UNLOCK_KEY = 'review-qr-unlock-v1';
+  const pay = { ready: false, enabled: false, unlocked: false, token: '' };
+
+  const isLocked = () => !pay.ready || (pay.enabled && !pay.unlocked);
+  const showWatermark = () => pay.ready && pay.enabled && !pay.unlocked;
+
+  function setUnlockStatus(cls, msg) {
+    const el = $('unlock-status');
+    el.className = 'status ' + cls;
+    el.textContent = msg;
+  }
+
+  function renderUnlock() {
+    $('unlock-locked').hidden = pay.unlocked;
+    $('unlock-done').hidden = !pay.unlocked;
+  }
+
+  /** Runs `action` if printing/downloads are unlocked, otherwise points the user at the unlock panel. */
+  function whenUnlocked(action) {
+    return () => {
+      if (!pay.ready) return;
+      if (!isLocked()) {
+        action();
+        return;
+      }
+      $('unlock-card').scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setUnlockStatus('warn', 'Printing and downloads need a one-time unlock.');
+    };
+  }
+
+  async function startCheckout() {
+    const btn = $('unlock-btn');
+    btn.disabled = true;
+    setUnlockStatus('', 'Opening secure checkout…');
+    try {
+      const resp = await fetch('/api/checkout', { method: 'POST' });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.url) throw new Error(data.error || 'Could not start checkout.');
+      location.href = data.url;
+    } catch (err) {
+      btn.disabled = false;
+      setUnlockStatus('err', '✗ ' + err.message);
+    }
+  }
+
+  async function copyUnlockLink() {
+    const link = `${location.origin}/?unlock=${encodeURIComponent(pay.token)}`;
+    try {
+      await navigator.clipboard.writeText(link);
+      setUnlockStatus('ok', '✓ Unlock link copied. Keep it somewhere safe, like an email to yourself.');
+    } catch {
+      window.prompt('Copy your unlock link:', link);
+    }
+  }
+
+  async function checkToken(token) {
+    const resp = await fetch('/api/unlock/check?token=' + encodeURIComponent(token));
+    if (!resp.ok) throw new Error('Could not check unlock code.');
+    return Boolean((await resp.json()).valid);
+  }
+
+  async function setupPayments(configPromise) {
+    const cfg = await configPromise.catch(() => null);
+    if (!cfg?.payments?.enabled) {
+      Object.assign(pay, { ready: true, enabled: false, unlocked: true });
+      scheduleRender();
+      return;
+    }
+
+    pay.enabled = true;
+    const price = new Intl.NumberFormat(undefined, { style: 'currency', currency: cfg.payments.currency.toUpperCase() })
+      .format(cfg.payments.amount / 100);
+    document.querySelectorAll('.price').forEach((el) => { el.textContent = price; });
+    $('unlock-card').hidden = false;
+
+    const params = new URLSearchParams(location.search);
+    const checkout = params.get('checkout');
+    const sessionId = params.get('session_id');
+    const linkToken = params.get('unlock');
+    if (checkout || linkToken) history.replaceState(null, '', location.pathname);
+
+    let token = '';
+    let verified = false;
+    if (checkout === 'success' && sessionId) {
+      setUnlockStatus('', 'Confirming your payment…');
+      try {
+        const resp = await fetch('/api/checkout/verify?session_id=' + encodeURIComponent(sessionId));
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok || !data.token) throw new Error(data.error || 'Could not confirm your payment.');
+        token = data.token;
+        verified = true;
+        setUnlockStatus('ok', '✓ Payment received. Thank you! Printing and downloads are unlocked.');
+      } catch (err) {
+        setUnlockStatus('err', `✗ ${err.message} If you were charged, reload this page or contact support with your receipt.`);
+      }
+    } else if (checkout === 'cancel') {
+      setUnlockStatus('warn', 'Checkout was cancelled. You have not been charged.');
+    }
+
+    if (!verified) {
+      const saved = localStorage.getItem(UNLOCK_KEY) || '';
+      for (const candidate of [...new Set([linkToken, saved].filter(Boolean))]) {
+        try {
+          if (await checkToken(candidate)) {
+            token = candidate;
+            verified = true;
+            if (candidate === linkToken) setUnlockStatus('ok', '✓ Unlocked from your saved link.');
+            break;
+          }
+          if (candidate === linkToken) setUnlockStatus('err', '✗ That unlock link is not valid.');
+          else localStorage.removeItem(UNLOCK_KEY);
+        } catch {
+          setUnlockStatus('err', '✗ Could not check your unlock right now. Reload the page to try again.');
+          break;
+        }
+      }
+    }
+
+    if (verified) {
+      pay.unlocked = true;
+      pay.token = token;
+      try { localStorage.setItem(UNLOCK_KEY, token); } catch { /* storage unavailable */ }
+    }
+    pay.ready = true;
+    renderUnlock();
+    scheduleRender();
   }
 
   // -------------------------------------------------------------- wiring
@@ -733,13 +884,18 @@
     $('test-link').addEventListener('click', () => {
       if (current.url) window.open(current.url, '_blank', 'noopener');
     });
-    $('dl-svg').addEventListener('click', downloadSvg);
-    $('dl-png').addEventListener('click', () => downloadPng().catch((err) => alert('PNG export failed: ' + err.message)));
-    $('print').addEventListener('click', () => { if (preparePrint()) window.print(); });
+    ['dl-png', 'dl-svg', 'print'].forEach((id) => { $(id).dataset.label = $(id).textContent; });
+    $('dl-svg').addEventListener('click', whenUnlocked(downloadSvg));
+    $('dl-png').addEventListener('click', whenUnlocked(() => downloadPng().catch((err) => alert('PNG export failed: ' + err.message))));
+    $('print').addEventListener('click', whenUnlocked(() => { if (preparePrint()) window.print(); }));
+    $('unlock-btn').addEventListener('click', startCheckout);
+    $('copy-unlock').addEventListener('click', copyUnlockLink);
     window.addEventListener('beforeprint', preparePrint);
     window.addEventListener('resize', () => { if (current.sticker) renderSheets(); });
 
-    setupPlaceSearch();
+    const configPromise = fetch('/api/config').then((resp) => (resp.ok ? resp.json() : Promise.reject(new Error('No server'))));
+    setupPlaceSearch(configPromise);
+    setupPayments(configPromise);
     render();
   }
 

@@ -132,6 +132,25 @@
     </section>
 
     <section class="previews">
+      <div class="card unlock-card" id="unlock-card" hidden>
+        <div class="unlock-locked" id="unlock-locked">
+          <div>
+            <h2>&#128274; Unlock printing &amp; downloads</h2>
+            <p class="muted">Design and preview for free. A one-time payment of <strong class="price"></strong> unlocks
+              unlimited printing and PNG/SVG downloads, with no subscription.</p>
+          </div>
+          <button id="unlock-btn" class="btn primary" type="button">Unlock for <span class="price"></span></button>
+        </div>
+        <div class="unlock-done" id="unlock-done" hidden>
+          <div>
+            <h2>&#10003; Unlocked</h2>
+            <p class="muted">Printing and downloads are unlocked in this browser. Save this link to unlock on another device:</p>
+          </div>
+          <button id="copy-unlock" class="btn ghost" type="button">Copy unlock link</button>
+        </div>
+        <p id="unlock-status" class="status"></p>
+      </div>
+
       <div class="card">
         <h2>Sticker preview</h2>
         <div class="preview-card">

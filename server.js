@@ -1,11 +1,21 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 try { process.loadEnvFile?.(path.join(__dirname, '.env')); } catch { /* no .env file */ }
 
 const PORT = Number(process.env.PORT) || 5173;
 const PLACES_KEY = (process.env.GOOGLE_MAPS_API_KEY || '').trim();
+
+const STRIPE_KEY = (process.env.STRIPE_SECRET_KEY || '').trim();
+const PRICE_CENTS = Number(process.env.PRICE_CENTS) || 1999;
+const CURRENCY = (process.env.CURRENCY || 'usd').trim().toLowerCase();
+const PRODUCT_NAME = process.env.PRODUCT_NAME || 'Google Review QR Stickers – unlimited printing & downloads';
+const PUBLIC_URL = (process.env.PUBLIC_URL || '').trim().replace(/\/+$/, '');
+// Unlock codes are signed with this secret; changing it invalidates every code already issued.
+const UNLOCK_SECRET = (process.env.UNLOCK_SECRET || '').trim() ||
+  (STRIPE_KEY ? crypto.createHash('sha256').update('unlock:' + STRIPE_KEY).digest('hex') : '');
 const ROOT = __dirname;
 const PUBLIC_FILES = new Set(['/index.html', '/styles.css', '/app.js', '/lib/qrcode.js', '/lib/qrcode_UTF8.js']);
 const TYPES = {
@@ -30,11 +40,12 @@ function clientIp(req) {
   return (typeof forwarded === 'string' && forwarded.split(',')[0].trim()) || req.socket.remoteAddress || 'unknown';
 }
 
-function rateLimited(ip) {
+function rateLimited(ip, bucket = 'places') {
   const now = Date.now();
-  const entry = hits.get(ip);
+  const id = bucket + ':' + ip;
+  const entry = hits.get(id);
   if (!entry || now - entry.start > RATE_LIMIT.windowMs) {
-    hits.set(ip, { start: now, count: 1 });
+    hits.set(id, { start: now, count: 1 });
     if (hits.size > 10_000) hits.clear();
     return false;
   }
@@ -75,9 +86,97 @@ async function searchPlaces(query) {
   return results;
 }
 
+// ------------------------------------------------------------------ Stripe
+
+async function stripeRequest(method, endpoint, params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const isGet = method === 'GET';
+  const resp = await fetch(`https://api.stripe.com/v1${endpoint}${isGet && query ? '?' + query : ''}`, {
+    method,
+    headers: {
+      Authorization: 'Bearer ' + STRIPE_KEY,
+      ...(isGet ? {} : { 'Content-Type': 'application/x-www-form-urlencoded' }),
+    },
+    body: isGet ? undefined : query,
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data?.error?.message || `Stripe request failed (${resp.status})`);
+  return data;
+}
+
+function sign(value) {
+  return crypto.createHmac('sha256', UNLOCK_SECRET).update(value).digest('base64url');
+}
+
+function makeUnlockToken(sessionId) {
+  return `${sessionId}.${sign(sessionId)}`;
+}
+
+function isValidUnlockToken(token) {
+  if (typeof token !== 'string' || !UNLOCK_SECRET) return false;
+  const dot = token.lastIndexOf('.');
+  if (dot <= 0) return false;
+  const expected = Buffer.from(sign(token.slice(0, dot)));
+  const given = Buffer.from(token.slice(dot + 1));
+  return expected.length === given.length && crypto.timingSafeEqual(expected, given);
+}
+
+function siteOrigin(req) {
+  if (PUBLIC_URL) return PUBLIC_URL;
+  const proto = String(req.headers['x-forwarded-proto'] || 'http').split(',')[0].trim();
+  return `${proto}://${req.headers.host}`;
+}
+
+async function handlePayments(req, res, url) {
+  if (!STRIPE_KEY) return sendJson(res, 503, { error: 'Payments are not set up on this server.' });
+
+  if (url.pathname === '/api/checkout') {
+    if (req.method !== 'POST') return sendJson(res, 405, { error: 'Use POST' });
+    if (rateLimited(clientIp(req), 'checkout')) return sendJson(res, 429, { error: 'Too many attempts. Wait a minute and try again.' });
+    const origin = siteOrigin(req);
+    const session = await stripeRequest('POST', '/checkout/sessions', {
+      mode: 'payment',
+      'line_items[0][quantity]': '1',
+      'line_items[0][price_data][currency]': CURRENCY,
+      'line_items[0][price_data][unit_amount]': String(PRICE_CENTS),
+      'line_items[0][price_data][product_data][name]': PRODUCT_NAME,
+      allow_promotion_codes: 'true',
+      success_url: `${origin}/?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${origin}/?checkout=cancel`,
+    });
+    return sendJson(res, 200, { url: session.url });
+  }
+
+  if (url.pathname === '/api/checkout/verify') {
+    const sessionId = url.searchParams.get('session_id') || '';
+    if (!/^cs_(test|live)_[A-Za-z0-9]+$/.test(sessionId)) return sendJson(res, 400, { error: 'Invalid checkout session.' });
+    const session = await stripeRequest('GET', `/checkout/sessions/${sessionId}`);
+    if (session.payment_status !== 'paid') return sendJson(res, 402, { error: 'Payment has not been completed.' });
+    return sendJson(res, 200, { token: makeUnlockToken(session.id) });
+  }
+
+  if (url.pathname === '/api/unlock/check') {
+    return sendJson(res, 200, { valid: isValidUnlockToken(url.searchParams.get('token')) });
+  }
+
+  return sendJson(res, 404, { error: 'Not found' });
+}
+
 async function handleApi(req, res, url) {
   if (url.pathname === '/api/config') {
-    return sendJson(res, 200, { placesEnabled: Boolean(PLACES_KEY) });
+    return sendJson(res, 200, {
+      placesEnabled: Boolean(PLACES_KEY),
+      payments: STRIPE_KEY ? { enabled: true, amount: PRICE_CENTS, currency: CURRENCY } : { enabled: false },
+    });
+  }
+
+  if (url.pathname === '/api/checkout' || url.pathname.startsWith('/api/checkout/') || url.pathname === '/api/unlock/check') {
+    try {
+      return await handlePayments(req, res, url);
+    } catch (err) {
+      console.error('Stripe error:', err.message);
+      return sendJson(res, 502, { error: 'Payments are temporarily unavailable. Please try again in a few minutes.' });
+    }
   }
 
   if (url.pathname === '/api/places') {
@@ -134,4 +233,7 @@ http.createServer((req, res) => {
 }).listen(PORT, () => {
   console.log(`Review QR Sticker Maker running at http://localhost:${PORT}`);
   console.log(PLACES_KEY ? 'Business search: enabled' : 'Business search: disabled (set GOOGLE_MAPS_API_KEY to enable)');
+  console.log(STRIPE_KEY
+    ? `Payments: enabled (${(PRICE_CENTS / 100).toFixed(2)} ${CURRENCY.toUpperCase()}, ${STRIPE_KEY.startsWith('sk_live_') ? 'LIVE' : 'test'} mode)`
+    : 'Payments: disabled, app is free (set STRIPE_SECRET_KEY to enable)');
 });
