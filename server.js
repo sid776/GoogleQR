@@ -53,9 +53,44 @@ function rateLimited(ip, bucket = 'places') {
   return entry.count > RATE_LIMIT.max;
 }
 
+// Daily cap on paid Google calls. Google bills autocomplete at $2.83 per 1,000 after 10,000 free
+// calls a month, so 370/day (11,470 in a 31-day month) keeps the bill under about $5.
+const PLACES_DAILY_LIMIT = Number(process.env.PLACES_DAILY_LIMIT) || 370;
+const USAGE_FILE = path.join(__dirname, '.places-usage.json');
+const usage = loadUsage();
+
+function pacificDate() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles' }).format(new Date());
+}
+
+function loadUsage() {
+  try {
+    const saved = JSON.parse(fs.readFileSync(USAGE_FILE, 'utf8'));
+    if (typeof saved.day === 'string' && Number.isFinite(saved.count)) return saved;
+  } catch { /* no usage recorded yet */ }
+  return { day: pacificDate(), count: 0 };
+}
+
+function takePlacesCall() {
+  const today = pacificDate();
+  if (usage.day !== today) Object.assign(usage, { day: today, count: 0 });
+  if (usage.count >= PLACES_DAILY_LIMIT) return false;
+  usage.count += 1;
+  fs.writeFile(USAGE_FILE, JSON.stringify(usage), () => {});
+  return true;
+}
+
+const DAILY_LIMIT_MESSAGE = "Business search has reached today's limit. Paste your review link below instead, or try again tomorrow.";
+
 async function searchPlaces(query) {
   const key = query.toLowerCase();
   if (cache.has(key)) return cache.get(key);
+
+  if (!takePlacesCall()) {
+    const err = new Error(DAILY_LIMIT_MESSAGE);
+    err.status = 429;
+    throw err;
+  }
 
   const resp = await fetch('https://places.googleapis.com/v1/places:autocomplete', {
     method: 'POST',
@@ -64,7 +99,8 @@ async function searchPlaces(query) {
   });
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) {
-    const err = new Error(data?.error?.message || `Google Places request failed (${resp.status})`);
+    const quotaHit = resp.status === 429;
+    const err = new Error(quotaHit ? DAILY_LIMIT_MESSAGE : data?.error?.message || `Google Places request failed (${resp.status})`);
     err.status = resp.status;
     throw err;
   }
@@ -191,7 +227,7 @@ async function handleApi(req, res, url) {
       return sendJson(res, 200, { results: await searchPlaces(q) });
     } catch (err) {
       console.error('Places autocomplete error:', err.message);
-      return sendJson(res, 502, { error: err.message });
+      return sendJson(res, err.status === 429 ? 429 : 502, { error: err.message });
     }
   }
 
@@ -232,7 +268,9 @@ http.createServer((req, res) => {
   });
 }).listen(PORT, () => {
   console.log(`Review QR Sticker Maker running at http://localhost:${PORT}`);
-  console.log(PLACES_KEY ? 'Business search: enabled' : 'Business search: disabled (set GOOGLE_MAPS_API_KEY to enable)');
+  console.log(PLACES_KEY
+    ? `Business search: enabled (limit ${PLACES_DAILY_LIMIT} Google calls/day, ${usage.count} used today)`
+    : 'Business search: disabled (set GOOGLE_MAPS_API_KEY to enable)');
   console.log(STRIPE_KEY
     ? `Payments: enabled (${(PRICE_CENTS / 100).toFixed(2)} ${CURRENCY.toUpperCase()}, ${STRIPE_KEY.startsWith('sk_live_') ? 'LIVE' : 'test'} mode)`
     : 'Payments: disabled, app is free (set STRIPE_SECRET_KEY to enable)');

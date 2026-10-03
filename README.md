@@ -20,6 +20,10 @@ The "Search for your business" box suggests Google businesses as you type. Picki
 
 The key stays on the server and is never sent to the browser. Searches are limited to 60 per minute per visitor. Without a key, the search box is disabled, and people can still paste their review link or Place ID.
 
+**Spending cap:** the server makes at most 370 Google calls per day (resetting at midnight Pacific time). Repeated searches reuse saved results and aren't counted. At Google's price ($2.83 per 1,000 after 10,000 free calls a month), that keeps the monthly bill under about $5. Change it with `PLACES_DAILY_LIMIT`. When the cap is reached, the search box tells people to paste their link instead.
+
+For a cap Google enforces itself, also set a daily quota in Google Cloud under **APIs & Services → Places API (New) → Quotas & System Limits**.
+
 ## Payments with Stripe (optional)
 
 Designing and previewing are free. A one-time payment (default $19.99) unlocks printing and PNG/SVG downloads. Payment happens on Stripe's hosted Checkout page, so card details never touch this app.
